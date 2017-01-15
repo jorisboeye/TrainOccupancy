@@ -25,21 +25,19 @@ with open(json_path) as json_file:
 print(len(trains), load_failures)
 
 
-map = folium.Map(location=[50.85, 4.35], zoom_start=9)
+map_days = folium.Map(location=[50.85, 4.35], zoom_start=9)
 
 kw = dict(opacity=1.0, weight=4)
 
-fg=folium.FeatureGroup(name="Train occupancies")
+for week_day in Train.week_day_mapping().values():
+    fg=folium.FeatureGroup(name=week_day)
+    for train in trains:
+        if train.week_day() == week_day:
+            origin = train.origin.coordinates()
+            destination = train.destination.coordinates()
+            line = folium.PolyLine(locations=[origin, destination], color=train.color(), **kw)
+            fg.add_child(line)
 
-for train in trains:
-    origin = train.origin.coordinates()
-    destination = train.destination.coordinates()
-    line = folium.PolyLine(locations=[origin, destination], color=train.color(), **kw)
-    fg.add_child(line)
-    # fg.add_child(folium.Marker(location=[lat,lon],
-    #                            popup=(folium.Popup(occ)),
-    #                            icon=folium.Icon(color=color(occ),icon_color='green')))
-
-map.add_child(fg)
-
-map.save('maps/occupancy.html')
+    map_days.add_child(fg)
+map_days.add_children(folium.map.LayerControl())
+map_days.save('maps/occupancy_days.html')

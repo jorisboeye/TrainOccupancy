@@ -18,16 +18,18 @@ class Train:
             else:
                 self.load_success = True
 
+    @staticmethod
+    def week_day_mapping():
+        return {0: 'Monday',
+                1: 'Tuesday',
+                2: 'Wednesday',
+                3: 'Thursday',
+                4: 'Friday',
+                5: 'Saturday',
+                6: 'Sunday'}
 
     def week_day(self):
-        week_day_mapping = {0: 'Monday',
-                            1: 'Tuesday',
-                            2: 'Wednesday',
-                            3: 'Thursday',
-                            4: 'Friday',
-                            5: 'Saturday',
-                            6: 'Sunday'}
-        return week_day_mapping[self.parsed_query_time.weekday()]
+        return self.week_day_mapping()[self.parsed_query_time.weekday()]
 
     def color(self):
         color_mapping = {'low': 'green', 'medium': 'orange', 'high': 'red'}
@@ -47,4 +49,4 @@ class Station:
             self.latitude = float(station_dict['latitude'])
 
     def coordinates(self):
-        return (self.latitude, self.longitude)
+        return self.latitude, self.longitude
