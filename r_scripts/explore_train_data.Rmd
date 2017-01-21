@@ -1,0 +1,71 @@
+---
+title: "Train exploration"
+author: "JBO"
+date: "21 January 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(jsonlite)
+library(tidyverse)
+library(lubridate)
+
+# to fix issues with directories
+library(rprojroot)
+root <- rprojroot::is_rstudio_project
+
+```
+
+
+##Load data
+```{r}
+con <- url("http://gtfs.irail.be/nmbs/feedback/occupancy-until-20161029.newlinedelimitedjsonobjects")
+train_data <- as_data_frame(jsonlite::flatten(jsonlite::stream_in(con), recursive=TRUE))
+
+station_data <- read_csv(paste0(root$find_file("data/"),"/stations.csv"))%>%
+  setNames(tolower(make.names(names(.))))
+```
+
+
+##How often is each station mentioned in the data?
+```{r}
+station_frequency <- train_data%>%
+  select(-user_agent, -querytype, -post.date)%>%
+  mutate(querytime = ymd_hms(querytime, tz = 'CET'))%>%
+  gather(key = direction, value = station, c(post.from, post.to))%>%
+  inner_join(station_data%>%
+               select(uri, name),
+             by = c('station' = 'uri'))%>%
+  # remove french translation after / from name
+  mutate(name = gsub(name, pattern = '/.*$', replacement = ''))%>%
+  mutate(direction = gsub(direction, pattern = 'post.', replacement = ''))%>%
+  group_by(name, direction)%>%
+  summarise(n_mentions = n())%>%
+  mutate(total_mentions = sum(n_mentions))%>%
+  ungroup()%>%
+  arrange(desc(total_mentions), name)
+
+head(station_frequency)
+```
+
+##Plot 10 most popular stations
+```{r, fig.align='center', fig.height=5, fig.width=9}
+station_frequency%>%
+  top_n(n = 20, wt = total_mentions)%>%
+  ggplot(aes(x = reorder(name, total_mentions), y = n_mentions, fill = direction))+
+  geom_col(position = 'dodge')+
+  scale_fill_brewer(palette = 'Set1')+
+  scale_y_continuous(expand = c(0, 0))+
+  labs(title = 'How often is each station mentioned in the data?',
+       subtitle = 'Top 10 subselection',
+       y = '# mentions in data')+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.2, hjust = 0),
+        axis.title.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_line(colour = 'grey40', size = rel(0.4)),
+        panel.grid.minor.y = element_line(colour = 'grey80', size = rel(0.4)))
+```
+
