@@ -5,11 +5,12 @@ date: "21 January 2017"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=FALSE }
 knitr::opts_chunk$set(echo = TRUE)
 library(jsonlite)
 library(tidyverse)
 library(lubridate)
+library(viridis)
 
 # to fix issues with directories
 library(rprojroot)
@@ -19,46 +20,47 @@ root <- rprojroot::is_rstudio_project
 
 
 ##Load data
-```{r}
+```{r, warning=FALSE, message=FALSE}
 con <- url("http://gtfs.irail.be/nmbs/feedback/occupancy-until-20161029.newlinedelimitedjsonobjects")
-train_data <- as_data_frame(jsonlite::flatten(jsonlite::stream_in(con), recursive=TRUE))
+train_data <- as_data_frame(jsonlite::flatten(jsonlite::stream_in(con), recursive=TRUE))%>%
+  setNames(gsub(x = names(.), pattern = 'post.', replacement = ''))%>%
+  select(-user_agent, -querytype, -date)%>%
+  mutate(querytime = ymd_hms(querytime, tz = 'CET'))%>%
+  mutate(occupancy = gsub(occupancy, pattern = 'http://api.irail.be/terms/', replacement = ''))
 
 station_data <- read_csv(paste0(root$find_file("data/"),"/stations.csv"))%>%
-  setNames(tolower(make.names(names(.))))
+  setNames(tolower(make.names(names(.))))%>%
+  # remove french translation after / from name
+  mutate(name = gsub(name, pattern = '/.*$', replacement = ''))
 ```
 
 
 ##How often is each station mentioned in the data?
-```{r}
+```{r, warning=FALSE}
 station_frequency <- train_data%>%
-  select(-user_agent, -querytype, -post.date)%>%
-  mutate(querytime = ymd_hms(querytime, tz = 'CET'))%>%
-  gather(key = direction, value = station, c(post.from, post.to))%>%
+  gather(key = direction, value = station, c(from, to))%>%
   inner_join(station_data%>%
                select(uri, name),
              by = c('station' = 'uri'))%>%
-  # remove french translation after / from name
-  mutate(name = gsub(name, pattern = '/.*$', replacement = ''))%>%
-  mutate(direction = gsub(direction, pattern = 'post.', replacement = ''))%>%
   group_by(name, direction)%>%
-  summarise(n_mentions = n())%>%
-  mutate(total_mentions = sum(n_mentions))%>%
+  summarise(n_records = n())%>%
+  mutate(total_mentions = sum(n_records))%>%
   ungroup()%>%
   arrange(desc(total_mentions), name)
 
 head(station_frequency)
 ```
 
-##Plot 10 most popular stations
-```{r, fig.align='center', fig.height=5, fig.width=9}
+##10 most popular stations
+```{r, fig.align='left', fig.height=5, fig.width=8, echo = FALSE, warning=FALSE}
 station_frequency%>%
   top_n(n = 20, wt = total_mentions)%>%
-  ggplot(aes(x = reorder(name, total_mentions), y = n_mentions, fill = direction))+
+  ggplot(aes(x = reorder(name, total_mentions), y = n_records, fill = direction))+
   geom_col(position = 'dodge')+
   scale_fill_brewer(palette = 'Set1')+
   scale_y_continuous(expand = c(0, 0))+
   labs(title = 'How often is each station mentioned in the data?',
-       subtitle = 'Top 10 subselection',
+       subtitle = 'Top stations 10 subselection',
        y = '# mentions in data')+
   theme_bw()+
   theme(axis.text.x = element_text(angle = -90, vjust = 0.2, hjust = 0),
@@ -66,6 +68,221 @@ station_frequency%>%
         panel.grid.major.x = element_blank(),
         panel.grid.minor.x = element_blank(),
         panel.grid.major.y = element_line(colour = 'grey40', size = rel(0.4)),
-        panel.grid.minor.y = element_line(colour = 'grey80', size = rel(0.4)))
+        panel.grid.minor.y = element_line(colour = 'grey80', size = rel(0.4)),
+        legend.position = 'top',
+        legend.justification = 'left')
 ```
 
+
+##How many records do we have of a particular connection from one station to another?
+####For stations that are mentioned at least 30 times as origin and 30 times as destination
+```{r, fig.align='left', fig.height=7, fig.width=9, echo=FALSE, warning=FALSE}
+
+occupancy_value_mapping = data_frame(occupancy = c('low', 'medium', 'high'),
+                                     occupancy_value = c(1, 2, 3))
+
+from_to_data <- train_data%>%
+  select(querytime, from, to, occupancy)%>%
+  inner_join(station_data%>%
+             select(uri, station_from = name),
+           by = c('from' = 'uri'))%>%
+  inner_join(station_data%>%
+             select(uri, station_to = name),
+           by = c('to' = 'uri'))%>%
+  select(-to, -from)%>%
+  inner_join(occupancy_value_mapping, 
+             by = 'occupancy')
+
+from_to_data%>%
+  count(station_from, station_to)%>%
+  group_by(station_from)%>%
+  filter(sum(n) > 30)%>%
+  group_by(station_to)%>%
+  filter(sum(n) > 30)%>%
+  ungroup()%>%
+  complete(station_from, station_to)%>%
+  ggplot(aes(x = station_from, y = station_to, fill = n, label = n))+
+  geom_tile(colour = 'grey80')+
+  geom_text()+
+  labs(x = 'Station from',
+       y = 'Station to')+
+  scale_fill_viridis('# Trains')+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.2, hjust = 0),
+        legend.key.width = grid::unit(3.6, "cm"),
+        legend.position = 'top',
+        legend.justification = 'left')+
+  guides(fill = guide_colorbar(title.position = "top"))
+```
+Note that there are multiple records where the **station from** equals the **station to**
+
+
+
+##What are the busiest hours during the workweek and the weekend?
+```{r, fig.align='left', fig.height=3, fig.width=8, echo=FALSE, warning=FALSE}
+from_to_data%>%
+  mutate(date = floor_date(querytime, unit = 'day'),
+         workday = factor(wday(date) %in% 2:6,
+                          levels = c(TRUE, FALSE),
+                          labels = c('Workday', 'Weekend')),
+         hour = hour(round_date(querytime, unit = 'hour')))%>%
+  group_by(workday, hour)%>%
+  summarise(mean_occupancy = mean(occupancy_value, na.rm = T),
+            n_records = n())%>%
+  ungroup()%>%
+  complete(workday, hour, fill = list(mean_occupancy = 0, n_records = 0))%>%
+  # set rare values to 0
+  mutate(mean_occupancy = ifelse(n_records < 10,
+                                 0,
+                                 mean_occupancy))%>%
+  ggplot(aes(x = hour, y = mean_occupancy, fill = workday))+
+  geom_col(position = "dodge")+
+  labs(x = 'Hour of the day',
+       y = 'Mean occupancy (1 = low, 3 = high)')+
+  scale_fill_brewer(palette = 'Set1')+
+  scale_x_continuous(breaks = 0:23)+
+  scale_y_continuous(expand = c(0,0))+
+  theme_minimal()+
+  theme(legend.title = element_blank(),
+        legend.position = 'top',
+        legend.justification = 'left',
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank())
+  
+```
+
+The morning rush hour clearly lasts from 6 until 9 AM, the evening rush is more spread out.
+
+##What is the mean occupancy from one trainstation to another (color fill) and how often was this connection observed (number)
+```{r, fig.align='left', fig.height=7, fig.width=8, echo=FALSE, warning=FALSE}
+from_to_data%>%
+  mutate(date = floor_date(querytime, unit = 'day'))%>%
+  group_by(station_from, station_to)%>%
+  summarise(mean_occupancy = mean(occupancy_value, na.rm = T),
+            n_records = n())%>%
+  group_by(station_from)%>%
+  filter(sum(n_records) > 30)%>%
+  group_by(station_to)%>%
+  filter(sum(n_records) > 30)%>%
+  ungroup()%>%
+  complete(station_from, station_to)%>%
+  ggplot(aes(x = station_from, y = station_to, fill = mean_occupancy, label = n_records))+
+  geom_tile(colour = 'grey80')+
+  geom_text()+
+  labs(x = 'Station from',
+       y = 'Station to')+
+  scale_fill_viridis('Mean occupancy (1 = low, 3 = high)')+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.2, hjust = 0),
+        legend.key.width = grid::unit(3.6, "cm"),
+        legend.position = 'top',
+        legend.justification = 'left')+
+  guides(fill = guide_colorbar(title.position = "top"))
+  
+```
+
+
+##How does this differ between workdays and weekends?
+```{r, fig.align='left', fig.height=12, fig.width=8, echo=FALSE, warning=FALSE}
+from_to_data%>%
+  mutate(date = floor_date(querytime, unit = 'day'),
+         workday = factor(wday(date) %in% 2:6,
+                          levels = c(TRUE, FALSE),
+                          labels = c('Workday', 'Weekend')))%>%
+  group_by(workday, station_from, station_to)%>%
+  summarise(mean_occupancy = mean(occupancy_value, na.rm = T),
+            n_records = n())%>%
+  group_by(station_from)%>%
+  filter(sum(n_records) > 30)%>%
+  group_by(station_to)%>%
+  filter(sum(n_records) > 30)%>%
+  ungroup()%>%
+  complete(workday, station_from, station_to)%>%
+  ggplot(aes(x = station_from, y = station_to, fill = mean_occupancy, label = n_records))+
+  geom_tile(colour = 'grey80')+
+  geom_text()+
+  facet_grid(workday~.)+
+  labs(x = 'Station from',
+       y = 'Station to')+
+  scale_fill_viridis('Mean occupancy (1 = low, 3 = high)')+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.2, hjust = 0),
+        legend.key.width = grid::unit(3, "cm"),
+        legend.position = 'top',
+        legend.justification = 'left')+
+  guides(fill = guide_colorbar(title.position = "top"))
+  
+```
+
+
+##What about rush hour?
+###If we assume that rush hour last from 5.30 to 9.30 in the morning and from 16.30 to 19.30 in the evening (see analysis above)
+```{r, fig.align='left', fig.height=12, fig.width=8, echo=FALSE, warning=FALSE}
+from_to_data%>%
+  mutate(date = floor_date(querytime, unit = 'day'),
+         workday = factor(wday(date) %in% 2:6,
+                          levels = c(TRUE, FALSE),
+                          labels = c('Workday', 'Weekend')),
+         rush_hour = factor(hour(round_date(querytime, unit = 'hour')) %in% c(6, 7, 8, 9, 17, 18, 19),
+                            levels = c(TRUE, FALSE),
+                            labels = c('During rush hours', 'Outside rush hours')))%>%
+  group_by(rush_hour, station_from, station_to)%>%
+  summarise(mean_occupancy = mean(occupancy_value, na.rm = T),
+            n_records = n())%>%
+  group_by(station_from)%>%
+  filter(sum(n_records) > 30)%>%
+  group_by(station_to)%>%
+  filter(sum(n_records) > 30)%>%
+  ungroup()%>%
+  complete(rush_hour, station_from, station_to)%>%
+  ggplot(aes(x = station_from, y = station_to, fill = mean_occupancy, label = n_records))+
+  geom_tile(colour = 'grey80')+
+  geom_text()+
+  facet_grid(rush_hour~.)+
+  labs(x = 'Station from',
+       y = 'Station to')+
+  scale_fill_viridis('Mean occupancy (1 = low, 3 = high)')+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.2, hjust = 0),
+        legend.key.width = grid::unit(3, "cm"),
+        legend.position = 'top',
+        legend.justification = 'left')+
+  guides(fill = guide_colorbar(title.position = "top"))
+  
+```
+
+
+##What if we combine workdays vs weekends and rush hour?
+```{r, fig.align='left', fig.height=12, fig.width=15, echo=FALSE, warning=FALSE}
+from_to_data%>%
+  mutate(date = floor_date(querytime, unit = 'day'),
+         workday = factor(wday(date) %in% 2:6,
+                          levels = c(TRUE, FALSE),
+                          labels = c('Workday', 'Weekend')),
+         rush_hour = factor(hour(round_date(querytime, unit = 'hour')) %in% c(7, 8, 16, 17),
+                            levels = c(TRUE, FALSE),
+                            labels = c('During rush hours', 'Outside rush hours')))%>%
+  group_by(workday, rush_hour, station_from, station_to)%>%
+  summarise(mean_occupancy = mean(occupancy_value, na.rm = T),
+            n_records = n())%>%
+  group_by(station_from)%>%
+  filter(sum(n_records) > 30)%>%
+  group_by(station_to)%>%
+  filter(sum(n_records) > 30)%>%
+  ungroup()%>%
+  complete(workday, rush_hour, station_from, station_to)%>%
+  ggplot(aes(x = station_from, y = station_to, fill = mean_occupancy, label = n_records))+
+  geom_tile(colour = 'grey80')+
+  geom_text()+
+  facet_grid(workday~rush_hour)+
+  labs(x = 'Station from',
+       y = 'Station to')+
+  scale_fill_viridis('Mean occupancy (1 = low, 3 = high)')+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.2, hjust = 0),
+        legend.key.width = grid::unit(3, "cm"),
+        legend.position = 'top',
+        legend.justification = 'left')+
+  guides(fill = guide_colorbar(title.position = "top"))
+  
+```
