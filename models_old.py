@@ -7,11 +7,14 @@ class Train:
             try:
                 self.query_time = json_line['querytime']
                 self.parsed_query_time = parse(self.query_time)
+                midnight = self.parsed_query_time.replace(hour=0, minute=0, second=0, microsecond=0)
+                self.seconds_since_midnight = (self.parsed_query_time - midnight).seconds
                 f_uri = json_line['post']['from']
                 self.origin = next((x for x in stations if x.uri == f_uri), None)
                 d_uri = json_line['post']['to']
                 self.destination = next((x for x in stations if x.uri == d_uri), None)
                 self.occupancy = json_line['post']['occupancy'].split('/')[-1]
+                self.vehicle = json_line['post']['vehicle'].split('/')[-1]
             except Exception as e:
                 print(e)
                 self.load_success = False
@@ -50,3 +53,16 @@ class Station:
 
     def coordinates(self):
         return self.latitude, self.longitude
+
+
+class Trip:
+    def __init__(self):
+        self.stops = []
+
+    def add_stop(self, stop):
+        self.stops.append(stop)
+
+
+class Stop:
+    def __init__(self, station):
+        self.station = station
