@@ -7,4 +7,6 @@ class Stop(Base):
     id = Column(Integer, primary_key=True)
     station_id = Column(Integer, ForeignKey('stations.id'))
     route_id = Column(Integer, ForeignKey('routes.id'))
+    arrival = Column(Integer)
+    departure = Column(Integer)
     sequence = Column(Integer)

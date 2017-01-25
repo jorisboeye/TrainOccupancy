@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 import os
 import re
 import pandas as pd
+from dateutil.parser import parse
 
 # determine the db location
 basedir = os.path.abspath(os.path.dirname(__file__))
@@ -44,17 +45,29 @@ db.commit()
 # add stops
 stop_csv_path = '/home/joris/PycharmProjects/Kaggle/TrainOccupancy/data/nmbs-2016-09/stop_times.txt'
 stops_df = pd.read_csv(stop_csv_path)
+errors = 0
 for row in stops_df.itertuples():
     try:
-        stop = Stop()
         route = db.query(Route).filter_by(trip_id=row.trip_id).first()
-        station_name = int(re.sub(':0', '', row.stop_id))
+        station_name = int(re.sub(r':\w+', '', row.stop_id))
         station = db.query(Station).filter_by(code=station_name).first()
-        stop.route = route
-        stop.station = station
-        stop.sequence = int(row.stop_sequence)
-        db.add(stop)
-    except Exception:
-        print('stop exception')
+    except Exception as err:
+        print('*'*80)
+        print('Handling run-time error:', err)
+        errors += 1
+        print('stop exception nr.:' + str(errors))
+        print('trip_id:', row.stop_id)
         continue
+    else:
+        if not db.query(exists().where(Stop.route==route and Stop.station==station)).scalar():
+            stop = Stop()
+            stop.route = route
+            stop.station = station
+            stop.sequence = int(row.stop_sequence)
+            arrival_parsed = parse(row.arrival_time)
+            departure_parsed = parse(row.departure_time)
+            midnight = arrival_parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+            stop.arrival = (arrival_parsed - midnight).seconds
+            stop.departure = (departure_parsed - midnight).seconds
+            db.add(stop)
 db.commit()
